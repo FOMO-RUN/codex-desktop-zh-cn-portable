@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Local logs and temporary files
+*.log
+*.tmp
+*.bak
+*.bak-*
+
+# Official/runtime app files must not be committed
+Codex/
+CodexZhCN/
+downloads/
+userData/
+*.msix
+*.appx
+*.asar
+*.exe
+*.dll
+*.pak
+*.bin
+*.node
+*.dat
+*.ico
+
+# Local secrets/config
+.env
+*.local.json
