@@ -63,6 +63,8 @@ flowchart LR
 codex_desktop_tool_zh.bat
 ```
 
+下载 Release zip 后请先解压再运行，不要在压缩包预览窗口里直接双击。`v0.1.1` 起入口脚本已兼容 Windows PowerShell 5.1，避免旧版因中文 `.ps1` 编码解析失败而一闪而过。
+
 推荐首次选择：
 
 ```text
@@ -78,6 +80,7 @@ codex_desktop_tool_zh.bat
 也可以直接运行：
 
 ```powershell
+python .\codex_desktop_zh_cn_windows.py --menu
 python .\codex_desktop_zh_cn_windows.py --dry-run
 python .\codex_desktop_zh_cn_windows.py --launch
 python .\codex_desktop_zh_cn_windows.py --rebuild --launch

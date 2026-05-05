@@ -287,12 +287,17 @@ def launch(app_dir: Path) -> None:
     if not exe:
         raise SystemExit(f"未找到 Codex.exe：{app_dir}")
     print(f"启动 Codex：{exe}")
+    user_data_dir = tool_root() / "userData"
+    user_data_dir.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    env["CODEX_ELECTRON_USER_DATA_PATH"] = str(user_data_dir)
     creationflags = 0
     if os.name == "nt":
         creationflags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
     subprocess.Popen(
         [str(exe), f"--lang={LANG_CODE}"],
         cwd=str(exe.parent),
+        env=env,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -436,7 +441,15 @@ def codex_menu_replacements() -> list[tuple[bytes, bytes]]:
     return [exact_width(source, target) for source, target in specs]
 
 
-MAIN_JS_REL = ".vite/build/main-BBYeJ7_G.js"
+MAIN_JS_REL_FALLBACK = ".vite/build/main-BBYeJ7_G.js"
+MAIN_MENU_MARKERS = [
+    "Menu.buildFromTemplate",
+    "getMenuItemById",
+    "role:`quit`",
+    "Codex Documentation",
+    "],Ge=n.Menu.buildFromTemplate(We),B=Ge.getMenuItemById(e.It.file)?.submenu;",
+    "Qe(Ge,e.It.edit,[[0,`撤销`]",
+]
 
 
 def asar_entry(header: dict[str, Any], path: str) -> dict[str, Any]:
@@ -450,6 +463,42 @@ def asar_entry(header: dict[str, Any], path: str) -> dict[str, Any]:
             raise KeyError(path)
         node = child
     return node
+
+
+def find_codex_main_menu_js(
+    header: dict[str, Any],
+    data: bytes,
+    content_base: int,
+) -> tuple[str, dict[str, Any], str]:
+    candidates = []
+    try:
+        candidates.append((MAIN_JS_REL_FALLBACK, asar_entry(header, MAIN_JS_REL_FALLBACK)))
+    except KeyError:
+        pass
+    candidates.extend(
+        (path, entry)
+        for path, entry in asar_file_entries(header)
+        if path.startswith(".vite/build/main-") and path.endswith(".js") and not entry.get("unpacked")
+    )
+
+    seen: set[str] = set()
+    for path, entry in candidates:
+        if path in seen:
+            continue
+        seen.add(path)
+        try:
+            offset = content_base + int(entry["offset"])
+            size = int(entry["size"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        try:
+            text = data[offset : offset + size].decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        if sum(1 for marker in MAIN_MENU_MARKERS if marker in text) >= 3:
+            return path, entry, text
+
+    return "", {}, ""
 
 
 def apply_codex_main_menu_logic_patch(text: str) -> tuple[str, int]:
@@ -575,13 +624,14 @@ def patch_codex_main_menu_logic(app_dir: Path, dry_run: bool = False) -> tuple[i
     asar = app_asar(app_dir.expanduser())
     data = asar.read_bytes()
     _, _, content_base, header = parse_asar(data)
-    entry = asar_entry(header, MAIN_JS_REL)
-    offset = content_base + int(entry["offset"])
-    size = int(entry["size"])
-    old_text = data[offset : offset + size].decode("utf-8")
+    main_js_rel, _, old_text = find_codex_main_menu_js(header, data, content_base)
+    if not main_js_rel:
+        print("未定位到 Codex 主菜单逻辑文件，已跳过额外逻辑补丁。")
+        return 0, None, None
     new_text, changes = apply_codex_main_menu_logic_patch(old_text)
 
     if dry_run:
+        print(f"[dry-run] Codex 主菜单逻辑文件：{main_js_rel}")
         print(f"[dry-run] Codex 主菜单逻辑补丁还需处理 {changes} 处。")
         return changes, None, None
 
@@ -591,7 +641,7 @@ def patch_codex_main_menu_logic(app_dir: Path, dry_run: bool = False) -> tuple[i
 
     backup = backup_file(asar, "before-menu-logic-zh-CN")
     try:
-        changed, old_hash, new_hash = patch_asar_embedded_file(asar, MAIN_JS_REL, new_text.encode("utf-8"))
+        changed, old_hash, new_hash = patch_asar_embedded_file(asar, main_js_rel, new_text.encode("utf-8"))
     except Exception:
         if backup.exists():
             shutil.copy2(backup, asar)
@@ -860,8 +910,52 @@ def prepare_app(args: argparse.Namespace) -> Path:
     return copy_app_dir(source, target_dir, rebuild=args.rebuild)
 
 
-def main() -> int:
+def interactive_menu() -> int:
+    actions: dict[str, tuple[str, list[str]]] = {
+        "1": ("生成 / 补丁 / 启动中文便携版", ["--launch"]),
+        "2": ("强制重建中文便携版", ["--rebuild", "--launch"]),
+        "3": ("仅补丁现有便携版菜单", ["--patch-menu"]),
+        "4": ("创建快捷方式", ["--create-shortcuts"]),
+        "5": ("启动现有便携版", ["--launch-existing"]),
+        "6": ("显示路径和版本", ["--show-paths"]),
+        "7": ("完全清理便携版文件", ["--full-clean"]),
+        "8": ("Dry-run 检查可补丁菜单字符串", ["--dry-run"]),
+    }
+
+    while True:
+        print()
+        print("Codex Desktop zh-CN 便携中文化工具")
+        print()
+        for key in ["1", "2", "3", "4", "5", "6", "7", "8"]:
+            print(f"{key}. {actions[key][0]}")
+        print("0. 退出")
+        print()
+        try:
+            choice = input("请选择：").strip()
+        except EOFError:
+            return 0
+        if choice == "0":
+            return 0
+        action = actions.get(choice)
+        if not action:
+            print("无效选择。")
+            continue
+
+        _, args = action
+        print()
+        code = main([*args])
+        print()
+        if code != 0:
+            print(f"命令失败，退出码：{code}")
+        try:
+            input("按 Enter 返回菜单")
+        except EOFError:
+            return code
+
+
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Patch Codex Desktop for Windows zh-CN portable use.")
+    parser.add_argument("--menu", action="store_true", help="打开交互菜单")
     parser.add_argument("--source", type=Path, help="官方 Codex app 目录、包根目录或 Codex.exe")
     parser.add_argument("--target-dir", type=Path, default=default_target_dir(), help="便携版 Codex 目录")
     parser.add_argument("--rebuild", action="store_true", help="强制从官方安装目录重建便携版")
@@ -873,7 +967,10 @@ def main() -> int:
     parser.add_argument("--full-clean", action="store_true", help="删除便携版、启动器和快捷方式")
     parser.add_argument("--yes", action="store_true", help="跳过清理确认")
     parser.add_argument("--dry-run", action="store_true", help="只检查官方安装目录中可补丁字符串，不写入文件")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+
+    if args.menu:
+        return interactive_menu()
 
     target_dir = args.target_dir.expanduser()
 
