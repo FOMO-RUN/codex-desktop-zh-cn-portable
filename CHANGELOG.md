@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.2 - 2026-05-05
+
+- 修复新版 Codex 中 `View` / `Window` 子菜单仍显示英文的问题。
+- 在 `Menu.setApplicationMenu(...)` 前注入菜单 label 映射，覆盖 Electron role 菜单和运行时生成的菜单项。
+- 修复 `--rebuild --patch-menu` 组合不会实际重建便携版的问题。
+- 已通过 `--rebuild --launch` 完整脚本路径验证，不依赖手工修改。
+
 ## 0.1.1 - 2026-05-05
 
 - 修复 Windows PowerShell 5.1 将无 BOM UTF-8 `.ps1` 按 ANSI 解析导致双击入口闪退的问题。

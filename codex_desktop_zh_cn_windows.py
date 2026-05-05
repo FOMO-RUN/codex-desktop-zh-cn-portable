@@ -541,6 +541,100 @@ def apply_codex_main_menu_logic_patch(text: str) -> tuple[str, int]:
         text = text.replace(marker, injection, 1)
         changes += 1
 
+    zh_label_map = {
+        "Settings…": "设置…",
+        "New Chat": "新聊天",
+        "Quick Chat": "快速聊天",
+        "New Window": "新窗口",
+        "Open Folder…": "打开文件夹…",
+        "Log Out": "退出登录",
+        "Exit": "退出",
+        "Quit Codex": "退出 Codex",
+        "About Codex": "关于 Codex",
+        "Command Menu…": "命令菜单…",
+        "Open command menu": "打开命令菜单",
+        "Search Files…": "搜索文件…",
+        "Search Chats…": "搜索聊天…",
+        "Copy conversation path": "复制会话路径",
+        "Copy working directory": "复制工作目录",
+        "Copy session id": "复制会话 ID",
+        "Copy deeplink": "复制深链",
+        "Pin/unpin chat": "固定/取消固定聊天",
+        "Rename chat": "重命名聊天",
+        "Archive chat": "归档聊天",
+        "Undo": "撤销",
+        "Redo": "重做",
+        "Cut": "剪切",
+        "Copy": "复制",
+        "Paste": "粘贴",
+        "Delete": "删除",
+        "Select All": "全选",
+        "Toggle Sidebar": "切换侧边栏",
+        "Toggle Terminal": "切换终端",
+        "Toggle File Tree": "切换文件树",
+        "Open Browser Tab": "打开浏览器标签页",
+        "Reload Browser Page": "重新加载浏览器页面",
+        "Hard Reload Browser Page": "强制重新加载浏览器页面",
+        "Toggle Diff Panel": "切换差异面板",
+        "Find": "查找",
+        "Previous Chat": "上个聊天",
+        "Next Chat": "下个聊天",
+        "Back": "后退",
+        "Forward": "前进",
+        "Reload Window": "重载窗口",
+        "Toggle Debug Menu": "切换调试菜单",
+        "Open Deeplink from Clipboard": "从剪贴板打开深链",
+        "Invalid Deeplink": "无效深链",
+        "Toggle Query Devtools": "切换查询开发工具",
+        "Zoom In": "放大",
+        "Zoom Out": "缩小",
+        "Actual Size": "实际大小",
+        "Toggle Full Screen": "切换全屏",
+        "Minimize": "最小化",
+        "Zoom": "缩放",
+        "Close": "关闭",
+        "Check for Updates…": "检查更新…",
+        "Updates Unavailable": "更新不可用",
+        "Codex Documentation": "Codex 文档",
+        "What's new": "新功能",
+        "Automations": "自动化",
+        "Local Environments": "本地环境",
+        "Worktrees": "工作树",
+        "Skills": "技能",
+        "Model Context Protocol": "模型上下文协议",
+        "Troubleshooting": "故障排除",
+        "Send Feedback": "发送反馈",
+        "Keyboard Shortcuts": "键盘快捷键",
+        "Start Trace Recording": "开始跟踪记录",
+        "Stop Trace Recording": "停止跟踪记录",
+        "Start Performance Trace": "开始性能跟踪",
+        "Stop Performance Trace": "停止性能跟踪",
+        "Waiting to Start Trace…": "等待开始跟踪…",
+        "Saving Trace…": "保存跟踪…",
+        "Waiting for Trace Details…": "等待跟踪详情…",
+        "Uploading Trace…": "上传跟踪…",
+    }
+    label_map_js = json.dumps(zh_label_map, ensure_ascii=False, separators=(",", ":"))
+    normalizer_expr = (
+        "globalThis.__codexZhCNMenuLabels=1,"
+        "((m,l)=>{let walk=i=>{if(!i)return;let label=l[i.label];"
+        "if(label)i.label=label;let items=i.submenu?.items;"
+        "if(Array.isArray(items))items.forEach(walk)};m.items?.forEach(walk)})"
+        f"(__MENU__,{label_map_js})"
+    )
+
+    modern_marker = "n.Menu.setApplicationMenu(Ke),aT(h)"
+    if modern_marker in text and "__codexZhCNMenuLabels" not in text:
+        injected = ";" + normalizer_expr.replace("__MENU__", "Ke") + "," + modern_marker
+        text = text.replace(modern_marker, injected, 1)
+        changes += 1
+
+    legacy_marker = "n.Menu.setApplicationMenu(Ge)"
+    if legacy_marker in text and "__codexZhCNMenuLabels" not in text:
+        injected = ";" + normalizer_expr.replace("__MENU__", "Ge") + "," + legacy_marker
+        text = text.replace(legacy_marker, injected, 1)
+        changes += 1
+
     return text, changes
 
 
@@ -981,7 +1075,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         return patch_codex_menu_strings(resolve_source(args), dry_run=True)
     if args.patch_menu:
-        patch_codex_menu_strings(target_dir, dry_run=False)
+        app_dir = prepare_app(args) if args.rebuild else target_dir
+        patch_codex_menu_strings(app_dir, dry_run=False)
         return 0
     if args.create_shortcuts:
         return create_shortcuts(target_dir)

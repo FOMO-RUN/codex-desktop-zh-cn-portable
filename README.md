@@ -38,11 +38,12 @@ ASAR 补丁分两层：
 ```mermaid
 flowchart LR
     A["resources\\app.asar"] --> B["等长原地替换<br/>Help/File/View 部分硬编码 label"]
-    B --> C["小范围重写 main-*.js<br/>补 Edit/Window role 菜单和完整中文标签"]
-    C --> D["重新计算目标文件 SHA256"]
-    D --> E["重写 ASAR header integrity"]
-    E --> F["重新计算 ASAR header hash"]
-    F --> G["替换 Codex.exe 中旧 header hash"]
+    B --> C["小范围重写 main-*.js<br/>注入菜单 label 映射"]
+    C --> D["Menu.setApplicationMenu 前<br/>递归修正运行时菜单项"]
+    D --> E["重新计算目标文件 SHA256"]
+    E --> F["重写 ASAR header integrity"]
+    F --> G["重新计算 ASAR header hash"]
+    G --> H["替换 Codex.exe 中旧 header hash"]
 ```
 
 ## 已覆盖的菜单项
@@ -53,7 +54,7 @@ flowchart LR
 - `Window` 菜单：`Minimize`、`Zoom`、`Close`。
 - `Help` 菜单：文档、新功能、自动化、本地环境、工作树、技能、MCP、故障排除、反馈、快捷键、性能跟踪等。
 
-脚本会先做等长原地补丁，再对主进程菜单文件做一次小范围重写，用来补齐 Electron `editMenu` / `windowMenu` role 生成的子菜单，以及少数等长补丁无法写下的完整中文标签。
+脚本会先做等长原地补丁，再对主进程菜单文件做一次小范围重写，在 `Menu.setApplicationMenu(...)` 前递归修正实际生成出来的菜单 label。这样可以覆盖 Electron `editMenu` / `windowMenu` role 生成的子菜单，以及新版 Codex 里通过 `electron.menuTitle` 运行时生成的 `View` 菜单项。
 
 ## 快速开始
 
