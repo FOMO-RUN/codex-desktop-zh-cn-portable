@@ -449,6 +449,8 @@ MAIN_MENU_MARKERS = [
     "Codex Documentation",
     "],Ge=n.Menu.buildFromTemplate(We),B=Ge.getMenuItemById(e.It.file)?.submenu;",
     "Qe(Ge,e.It.edit,[[0,`撤销`]",
+    "],Qe=n.Menu.buildFromTemplate(Ze),$e=Qe.getMenuItemById(e.Qt.file)?.submenu;",
+    "n.Menu.setApplicationMenu(Qe)",
 ]
 
 
@@ -501,6 +503,86 @@ def find_codex_main_menu_js(
     return "", {}, ""
 
 
+def find_webview_locale_js(
+    header: dict[str, Any],
+    data: bytes,
+    content_base: int,
+) -> tuple[str, dict[str, Any], str]:
+    candidates = [
+        (path, entry)
+        for path, entry in asar_file_entries(header)
+        if path.startswith("webview/assets/app-main-") and path.endswith(".js") and not entry.get("unpacked")
+    ]
+    for path, entry in candidates:
+        try:
+            offset = content_base + int(entry["offset"])
+            size = int(entry["size"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        try:
+            text = data[offset : offset + size].decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        if "codex_i18n_locale_resolved" in text and "locale_source" in text and "LOCALE_OVERRIDE" in text:
+            return path, entry, text
+    return "", {}, ""
+
+
+def apply_webview_locale_force_patch(text: str) -> tuple[str, int]:
+    changes = 0
+    replacements = [
+        ("(0,Q.useMemo)(()=>n?.get(`enable_i18n`,!1),[n])", "(0,Q.useMemo)(()=>!0,[n])"),
+        (
+            "(0,Q.useMemo)(()=>a||(i===`SYSTEM`?s:i===`FIRST_AVAILABLE`?o!==void 0&&!gh(o)?o:s!==void 0&&!gh(s)?s:void 0:o),[o,a,i,s])",
+            "(0,Q.useMemo)(()=>a??`zh-CN`,[a])",
+        ),
+    ]
+    for source, target in replacements:
+        count = text.count(source)
+        if count:
+            text = text.replace(source, target)
+            changes += count
+    return text, changes
+
+
+def find_webview_js_by_markers(
+    header: dict[str, Any],
+    data: bytes,
+    content_base: int,
+    *,
+    startswith: str,
+    markers: list[str],
+) -> tuple[str, dict[str, Any], str]:
+    candidates = [
+        (path, entry)
+        for path, entry in asar_file_entries(header)
+        if path.startswith(startswith) and path.endswith(".js") and not entry.get("unpacked")
+    ]
+    for path, entry in candidates:
+        try:
+            offset = content_base + int(entry["offset"])
+            size = int(entry["size"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        try:
+            text = data[offset : offset + size].decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        if all(marker in text for marker in markers):
+            return path, entry, text
+    return "", {}, ""
+
+
+def apply_webview_ui_string_patch(text: str, replacements: list[tuple[str, str]]) -> tuple[str, int]:
+    changes = 0
+    for source, target in replacements:
+        count = text.count(source)
+        if count:
+            text = text.replace(source, target)
+            changes += count
+    return text, changes
+
+
 def apply_codex_main_menu_logic_patch(text: str) -> tuple[str, int]:
     changes = 0
 
@@ -529,32 +611,54 @@ def apply_codex_main_menu_logic_patch(text: str) -> tuple[str, int]:
             text = text.replace(source, target)
             changes += count
 
-    marker = "],Ge=n.Menu.buildFromTemplate(We),B=Ge.getMenuItemById(e.It.file)?.submenu;"
-    injection = (
+    legacy_marker = "],Ge=n.Menu.buildFromTemplate(We),B=Ge.getMenuItemById(e.It.file)?.submenu;"
+    legacy_injection = (
         "],Ge=n.Menu.buildFromTemplate(We),Qe=(t,r,i)=>{let a=t.getMenuItemById(r)?.submenu;"
         "if(a)for(let[t,r]of i){let i=a.items[t];i&&(i.label=r)}};"
         "Qe(Ge,e.It.edit,[[0,`撤销`],[1,`重做`],[3,`剪切`],[4,`复制`],[5,`粘贴`],[6,`删除`],[8,`全选`]]);"
         "Qe(Ge,e.It.window,[[0,`最小化`],[1,`缩放`],[2,`关闭`]]);"
         "B=Ge.getMenuItemById(e.It.file)?.submenu;"
     )
-    if marker in text and "Qe(Ge,e.It.edit,[[0,`撤销`]" not in text:
-        text = text.replace(marker, injection, 1)
+    if legacy_marker in text and "Qe(Ge,e.It.edit,[[0,`撤销`]" not in text:
+        text = text.replace(legacy_marker, legacy_injection, 1)
+        changes += 1
+
+    current_marker = "],Qe=n.Menu.buildFromTemplate(Ze),$e=Qe.getMenuItemById(e.Qt.file)?.submenu;"
+    current_injection = (
+        "],Qe=n.Menu.buildFromTemplate(Ze),$z=(t,r,i)=>{let a=t.getMenuItemById(r)?.submenu;"
+        "if(a)for(let[t,r]of i){let i=a.items[t];i&&(i.label=r)}};"
+        "$z(Qe,e.Qt.edit,[[0,`撤销`],[1,`重做`],[3,`剪切`],[4,`复制`],[5,`粘贴`],[6,`删除`],[8,`全选`]]);"
+        "$z(Qe,e.Qt.window,[[0,`最小化`],[1,`缩放`],[2,`关闭`]]);"
+        "$e=Qe.getMenuItemById(e.Qt.file)?.submenu;"
+    )
+    if current_marker in text and "$z(Qe,e.Qt.edit,[[0,`撤销`]" not in text:
+        text = text.replace(current_marker, current_injection, 1)
         changes += 1
 
     zh_label_map = {
+        "File": "文件",
+        "Edit": "编辑",
+        "View": "视图",
+        "Window": "窗口",
+        "Help": "帮助",
         "Settings…": "设置…",
+        "Settings...": "设置...",
         "New Chat": "新聊天",
         "Quick Chat": "快速聊天",
         "New Window": "新窗口",
         "Open Folder…": "打开文件夹…",
+        "Open Folder...": "打开文件夹...",
         "Log Out": "退出登录",
         "Exit": "退出",
         "Quit Codex": "退出 Codex",
         "About Codex": "关于 Codex",
         "Command Menu…": "命令菜单…",
+        "Command Menu...": "命令菜单...",
         "Open command menu": "打开命令菜单",
         "Search Files…": "搜索文件…",
+        "Search Files...": "搜索文件...",
         "Search Chats…": "搜索聊天…",
+        "Search Chats...": "搜索聊天...",
         "Copy conversation path": "复制会话路径",
         "Copy working directory": "复制工作目录",
         "Copy session id": "复制会话 ID",
@@ -570,9 +674,12 @@ def apply_codex_main_menu_logic_patch(text: str) -> tuple[str, int]:
         "Delete": "删除",
         "Select All": "全选",
         "Toggle Sidebar": "切换侧边栏",
+        "Toggle Side Panel": "切换侧边栏",
         "Toggle Terminal": "切换终端",
         "Toggle File Tree": "切换文件树",
+        "Toggle Browser Panel": "切换浏览器面板",
         "Open Browser Tab": "打开浏览器标签页",
+        "Focus Browser Address Bar": "聚焦浏览器地址栏",
         "Reload Browser Page": "重新加载浏览器页面",
         "Hard Reload Browser Page": "强制重新加载浏览器页面",
         "Toggle Diff Panel": "切换差异面板",
@@ -623,17 +730,18 @@ def apply_codex_main_menu_logic_patch(text: str) -> tuple[str, int]:
         f"(__MENU__,{label_map_js})"
     )
 
-    modern_marker = "n.Menu.setApplicationMenu(Ke),aT(h)"
-    if modern_marker in text and "__codexZhCNMenuLabels" not in text:
-        injected = ";" + normalizer_expr.replace("__MENU__", "Ke") + "," + modern_marker
-        text = text.replace(modern_marker, injected, 1)
-        changes += 1
-
-    legacy_marker = "n.Menu.setApplicationMenu(Ge)"
-    if legacy_marker in text and "__codexZhCNMenuLabels" not in text:
-        injected = ";" + normalizer_expr.replace("__MENU__", "Ge") + "," + legacy_marker
-        text = text.replace(legacy_marker, injected, 1)
-        changes += 1
+    app_menu_markers = [
+        ("n.Menu.setApplicationMenu(Ke),aT(h)", "Ke"),
+        ("n.Menu.setApplicationMenu(Ge)", "Ge"),
+        ("n.Menu.setApplicationMenu(Qe)", "Qe"),
+    ]
+    if "__codexZhCNMenuLabels" not in text:
+        for marker_text, menu_var in app_menu_markers:
+            if marker_text in text:
+                injected = ";" + normalizer_expr.replace("__MENU__", menu_var) + "," + marker_text
+                text = text.replace(marker_text, injected, 1)
+                changes += 1
+                break
 
     return text, changes
 
@@ -749,6 +857,147 @@ def patch_codex_main_menu_logic(app_dir: Path, dry_run: bool = False) -> tuple[i
     print(f"已补丁 Codex 主菜单逻辑：{changes} 处")
     return changes, old_hash, new_hash
 
+
+def patch_webview_locale_force(app_dir: Path, dry_run: bool = False) -> tuple[int, str | None, str | None]:
+    asar = app_asar(app_dir.expanduser())
+    data = asar.read_bytes()
+    _, _, content_base, header = parse_asar(data)
+    js_rel, _, old_text = find_webview_locale_js(header, data, content_base)
+    if not js_rel:
+        print("未定位到 WebView 语言逻辑文件，已跳过界面中文强制补丁。")
+        return 0, None, None
+    new_text, changes = apply_webview_locale_force_patch(old_text)
+
+    if dry_run:
+        print(f"[dry-run] WebView 语言逻辑文件：{js_rel}")
+        print(f"[dry-run] WebView 中文强制补丁还需处理 {changes} 处。")
+        return changes, None, None
+
+    if changes == 0:
+        print("WebView 中文强制补丁已应用，或当前版本不需要。")
+        return 0, None, None
+
+    backup = backup_file(asar, "before-webview-locale-zh-CN")
+    try:
+        changed, old_hash, new_hash = patch_asar_embedded_file(asar, js_rel, new_text.encode("utf-8"))
+    except Exception:
+        if backup.exists():
+            shutil.copy2(backup, asar)
+        raise
+
+    if not changed:
+        print("WebView 中文强制补丁无需写入。")
+        return 0, None, None
+
+    print(f"已备份 app.asar：{backup}")
+    print(f"已补丁 WebView 中文强制逻辑：{changes} 处")
+    return changes, old_hash, new_hash
+
+
+def patch_webview_ui_strings(app_dir: Path, dry_run: bool = False) -> tuple[int, list[str], list[str]]:
+    asar = app_asar(app_dir.expanduser())
+    data = asar.read_bytes()
+    _, _, content_base, header = parse_asar(data)
+
+    specs = [
+        {
+            "name": "外观-减少动画",
+            "startswith": "webview/assets/general-settings-",
+            "markers": [
+                "settings.general.appearance.reducedMotion.label",
+                "Reduce motion",
+                "Reduce animations or match your system",
+            ],
+            "replacements": [
+                ("defaultMessage:`Reduce motion`", "defaultMessage:`减少动画`"),
+                ("defaultMessage:`Reduce animations or match your system`", "defaultMessage:`减少动画或跟随系统`"),
+                ("defaultMessage:`System`", "defaultMessage:`系统`"),
+                ("defaultMessage:`On`", "defaultMessage:`开启`"),
+                ("defaultMessage:`Off`", "defaultMessage:`关闭`"),
+            ],
+        },
+        {
+            "name": "钩子空状态",
+            "startswith": "webview/assets/hooks-settings-",
+            "markers": [
+                "settings.hooks.emptyHooks.label",
+                "No hooks found",
+                "Projects with configured hooks will appear here",
+            ],
+            "replacements": [
+                ("defaultMessage:`No hooks found`", "defaultMessage:`未找到钩子`"),
+                (
+                    "defaultMessage:`Projects with configured hooks will appear here`",
+                    "defaultMessage:`已配置钩子的项目会显示在这里`",
+                ),
+            ],
+        },
+        {
+            "name": "侧边栏命令标题",
+            "startswith": "webview/assets/keyboard-shortcuts-search-input-",
+            "markers": [
+                "codex.command.toggleSidePanel",
+                "Toggle Side Panel",
+                "Focus Browser Address Bar",
+            ],
+            "replacements": [
+                ("defaultMessage:`Toggle side panel`", "defaultMessage:`切换侧边栏`"),
+                ("defaultMessage:`Toggle Side Panel`", "defaultMessage:`切换侧边栏`"),
+                ("defaultMessage:`Toggle Browser Panel`", "defaultMessage:`切换浏览器面板`"),
+                ("defaultMessage:`Focus browser address bar`", "defaultMessage:`聚焦浏览器地址栏`"),
+                ("defaultMessage:`Focus Browser Address Bar`", "defaultMessage:`聚焦浏览器地址栏`"),
+            ],
+        },
+    ]
+
+    total_changes = 0
+    old_hashes: list[str] = []
+    new_hashes: list[str] = []
+
+    for spec in specs:
+        js_rel, _, old_text = find_webview_js_by_markers(
+            header,
+            data,
+            content_base,
+            startswith=spec["startswith"],
+            markers=spec["markers"],
+        )
+        if not js_rel:
+            print(f"未定位到 {spec['name']} 文件，已跳过。")
+            continue
+        new_text, changes = apply_webview_ui_string_patch(old_text, spec["replacements"])
+
+        if dry_run:
+            print(f"[dry-run] {spec['name']} 文件：{js_rel}")
+            print(f"[dry-run] {spec['name']} 还需处理 {changes} 处。")
+            total_changes += changes
+            continue
+
+        if changes == 0:
+            print(f"{spec['name']} 补丁已应用，或当前版本不需要。")
+            continue
+
+        backup = backup_file(asar, f"before-{spec['name']}-zh-CN")
+        try:
+            changed, old_hash, new_hash = patch_asar_embedded_file(asar, js_rel, new_text.encode("utf-8"))
+        except Exception:
+            if backup.exists():
+                shutil.copy2(backup, asar)
+            raise
+
+        if not changed:
+            print(f"{spec['name']} 补丁无需写入。")
+            continue
+
+        print(f"已备份 app.asar：{backup}")
+        print(f"已补丁 {spec['name']}：{changes} 处")
+        total_changes += changes
+        old_hashes.append(old_hash)
+        new_hashes.append(new_hash)
+        data = asar.read_bytes()
+        _, _, content_base, header = parse_asar(data)
+
+    return total_changes, old_hashes, new_hashes
 
 def count_asar_tokens(asar: Path, tokens: list[bytes]) -> dict[bytes, int]:
     data = asar.read_bytes()
@@ -886,6 +1135,8 @@ def patch_codex_menu_strings(app_dir: Path, dry_run: bool = False) -> int:
             print(f"  {source.decode('utf-8', 'replace')}: {counts[source]}")
         print(f"[dry-run] 共可替换 {total} 处。")
         patch_codex_main_menu_logic(app_dir, dry_run=True)
+        patch_webview_locale_force(app_dir, dry_run=True)
+        patch_webview_ui_strings(app_dir, dry_run=True)
         return 0
 
     old_header_hashes: list[str] = []
@@ -931,7 +1182,26 @@ def patch_codex_menu_strings(app_dir: Path, dry_run: bool = False) -> int:
             [logic_old_hash, *backup_header_hashes(asar, "before-menu-logic-zh-CN")],
             "before-menu-logic-zh-CN",
         )
-    elif total == 0:
+
+    webview_changes, webview_old_hash, webview_new_hash = patch_webview_locale_force(app_dir, dry_run=False)
+    if webview_changes and webview_old_hash and webview_new_hash:
+        patch_exe_asar_header_hash(
+            app_dir,
+            webview_new_hash,
+            [webview_old_hash, *backup_header_hashes(asar, "before-webview-locale-zh-CN")],
+            "before-webview-locale-zh-CN",
+        )
+
+    webview_ui_changes, webview_ui_old_hashes, webview_ui_new_hashes = patch_webview_ui_strings(app_dir, dry_run=False)
+    if webview_ui_changes and webview_ui_old_hashes and webview_ui_new_hashes:
+        patch_exe_asar_header_hash(
+            app_dir,
+            webview_ui_new_hashes[-1],
+            [*webview_ui_old_hashes, *backup_header_hashes(asar, "before-外观-减少动画-zh-CN"), *backup_header_hashes(asar, "before-钩子空状态-zh-CN"), *backup_header_hashes(asar, "before-侧边栏命令标题-zh-CN")],
+            "before-webview-ui-zh-CN",
+        )
+
+    if total == 0 and logic_changes == 0 and webview_changes == 0 and webview_ui_changes == 0:
         current_hash = asar_header_hash(asar.read_bytes())
         patch_exe_asar_header_hash(
             app_dir,
@@ -939,6 +1209,10 @@ def patch_codex_menu_strings(app_dir: Path, dry_run: bool = False) -> int:
             [
                 *backup_header_hashes(asar, "before-menu-zh-CN"),
                 *backup_header_hashes(asar, "before-menu-logic-zh-CN"),
+                *backup_header_hashes(asar, "before-webview-locale-zh-CN"),
+                *backup_header_hashes(asar, "before-外观-减少动画-zh-CN"),
+                *backup_header_hashes(asar, "before-钩子空状态-zh-CN"),
+                *backup_header_hashes(asar, "before-侧边栏命令标题-zh-CN"),
             ],
             "before-menu-zh-CN",
         )
